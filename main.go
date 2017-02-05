@@ -7,10 +7,15 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
 func main() {
+
+	// list currently "watched" games
+	// create a game "watch"
+
 	// find today's games
 	// while !EndofGame
 	//   get pbp
@@ -18,38 +23,109 @@ func main() {
 	//   send to twitter
 
 	// requested game by gamecode
-	gameCode := os.Args[1]
-	fmt.Println("passed in", gameCode)
+
+	r := NewRegistrar()
+	h := Handler{r}
+
+	http.HandleFunc("/active", h.GetActiveGames)
+	http.HandleFunc("/watch/", h.WatchGame)
+
+	log.Fatal(http.ListenAndServe(":8084", nil))
+}
+
+type Handler struct {
+	r Registrar
+}
+
+func (h *Handler) GetActiveGames(w http.ResponseWriter, r *http.Request) {
+	g := struct {
+		Games []string `json:"games"`
+	}{
+		h.r.getActiveGames(),
+	}
+
+	enc := json.NewEncoder(w)
+	err := enc.Encode(&g)
+	if err != nil {
+		log.Printf("error encoding active games: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, `{"error":"server error occurred"}`)
+		return
+	}
+}
+
+func (h *Handler) WatchGame(w http.ResponseWriter, r *http.Request) {
+	requestedGameCode := r.URL.Path[len("/watch/"):]
+	log.Printf("requested %s watch\n", requestedGameCode)
+
+	if _, ok := h.r.m[requestedGameCode]; !ok {
+		go watch(&h.r, requestedGameCode)
+		log.Printf("now watching %s\n", requestedGameCode)
+		w.WriteHeader(http.StatusAccepted)
+	} else {
+		log.Printf("already watching %s\n", requestedGameCode)
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+type Registrar struct {
+	sync.RWMutex
+	m map[string]bool
+}
+
+func NewRegistrar() Registrar {
+	return Registrar{m: make(map[string]bool)}
+}
+
+func (r *Registrar) getActiveGames() []string {
+	keys := make([]string, 0, len(r.m))
+	for k := range r.m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (r *Registrar) markGame(gameCode string) {
+	r.Lock()
+	r.m[gameCode] = true
+	r.Unlock()
+}
+
+func (r *Registrar) unmarkGame(gameCode string) {
+	r.Lock()
+	r.m[gameCode] = true
+	r.Unlock()
+}
+
+func watch(r *Registrar, gameCode string) error {
+	r.markGame(gameCode) // consider short circuit if already watching?
+	defer r.unmarkGame(gameCode)
 
 	pbp, err := game(gameCode)
 	if err != nil {
-		fmt.Printf("something went wrong: %s\n", err)
-		return
+		log.Printf("something went wrong retrieving: %s\n", err)
+		return err
 	}
 
 	for pbp.Game.Active {
-		fmt.Println("in loop")
 		pbp, err = game(gameCode) // better way to do this?
-		fmt.Printf("%+v\n", pbp.Game)
 		if err != nil {
 			log.Printf("something went wrong retrieving: %s\n", err)
-			return
+			return err
 		}
-		fmt.Println("events before filter: ", len(pbp.Plays))
 		pbp, err = filter(pbp)
 		if err != nil {
 			log.Printf("something went wrong filtering: %s\n", err)
-			return
+			return err
 		}
-		fmt.Println("events after filter: ", len(pbp.Plays))
-		fmt.Printf("%+v\n", pbp.Game)
 		err = tweet(pbp)
 		if err != nil {
 			log.Printf("something went wrong tweeting: %s\n", err)
-			return
+			return err
 		}
 		time.Sleep(10 * time.Second) // better way to do this for sure
 	}
+	return nil
 }
 
 func tweet(pbp PlayByPlayGame) error {
@@ -67,7 +143,7 @@ func tweet(pbp PlayByPlayGame) error {
 
 func filter(pbp PlayByPlayGame) (PlayByPlayGame, error) {
 	b := new(bytes.Buffer)
-	json.NewEncoder(b).Encode(pbp)
+	json.NewEncoder(b).Encode(pbp) // TODO
 	url := fmt.Sprintf("http://localhost:8082/filter/%s", pbp.Game.GameCode())
 	resp, err := http.Post(url, "application/json", b)
 	if err != nil {
