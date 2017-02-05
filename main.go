@@ -28,7 +28,7 @@ func main() {
 	h := Handler{r}
 
 	http.HandleFunc("/active", h.GetActiveGames)
-	http.HandleFunc("/watch/", h.WatchGame)
+	http.HandleFunc("/activate/", h.ActivateGame)
 
 	log.Fatal(http.ListenAndServe(":8084", nil))
 }
@@ -54,16 +54,15 @@ func (h *Handler) GetActiveGames(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) WatchGame(w http.ResponseWriter, r *http.Request) {
-	requestedGameCode := r.URL.Path[len("/watch/"):]
-	log.Printf("requested %s watch\n", requestedGameCode)
+func (h *Handler) ActivateGame(w http.ResponseWriter, r *http.Request) {
+	requestedGameCode := r.URL.Path[len("/activate/"):]
 
 	if _, ok := h.r.m[requestedGameCode]; !ok {
-		go watch(&h.r, requestedGameCode)
-		log.Printf("now watching %s\n", requestedGameCode)
+		go activate(&h.r, requestedGameCode)
+		log.Printf("now activating %s\n", requestedGameCode)
 		w.WriteHeader(http.StatusAccepted)
 	} else {
-		log.Printf("already watching %s\n", requestedGameCode)
+		log.Printf("already activated %s\n", requestedGameCode)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
@@ -97,7 +96,7 @@ func (r *Registrar) unmarkGame(gameCode string) {
 	r.Unlock()
 }
 
-func watch(r *Registrar, gameCode string) error {
+func activate(r *Registrar, gameCode string) error {
 	r.markGame(gameCode) // consider short circuit if already watching?
 	defer r.unmarkGame(gameCode)
 
@@ -128,17 +127,27 @@ func watch(r *Registrar, gameCode string) error {
 	return nil
 }
 
-func tweet(pbp PlayByPlayGame) error {
-	b := new(bytes.Buffer)
-	json.NewEncoder(b).Encode(pbp)
-	url := "http://localhost:8083/tweet"
+func game(gameCode string) (PlayByPlayGame, error) {
+	url := fmt.Sprintf("http://localhost:8081/pbp/%s", gameCode)
 
-	_, err := http.Post(url, "application/json", b)
-
+	resp, err := http.Get(url)
 	if err != nil {
-		return err
+		fmt.Println("something went wrong in retrieving pbp", err)
+		return PlayByPlayGame{}, err
 	}
-	return nil
+	defer resp.Body.Close()
+
+	dec := json.NewDecoder(resp.Body)
+	var pbp PlayByPlayGame
+	for dec.More() {
+		err := dec.Decode(&pbp)
+		if err != nil {
+			log.Printf("error decoding pbp game %s\n", err)
+			return PlayByPlayGame{}, err
+		}
+	}
+
+	return pbp, nil
 }
 
 func filter(pbp PlayByPlayGame) (PlayByPlayGame, error) {
@@ -164,27 +173,17 @@ func filter(pbp PlayByPlayGame) (PlayByPlayGame, error) {
 	return filteredPbp, nil
 }
 
-func game(gameCode string) (PlayByPlayGame, error) {
-	url := fmt.Sprintf("http://localhost:8081/pbp/%s", gameCode)
+func tweet(pbp PlayByPlayGame) error {
+	b := new(bytes.Buffer)
+	json.NewEncoder(b).Encode(pbp)
+	url := "http://localhost:8083/tweet"
 
-	resp, err := http.Get(url)
+	_, err := http.Post(url, "application/json", b)
+
 	if err != nil {
-		fmt.Println("something went wrong in retrieving pbp", err)
-		return PlayByPlayGame{}, err
+		return err
 	}
-	defer resp.Body.Close()
-
-	dec := json.NewDecoder(resp.Body)
-	var pbp PlayByPlayGame
-	for dec.More() {
-		err := dec.Decode(&pbp)
-		if err != nil {
-			log.Printf("error decoding pbp game %s\n", err)
-			return PlayByPlayGame{}, err
-		}
-	}
-
-	return pbp, nil
+	return nil
 }
 
 type PlayByPlayGame struct {
