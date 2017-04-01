@@ -79,7 +79,7 @@ func NewRegistrar() Registrar {
 func (r *Registrar) getActiveGames() []string {
 	keys := make([]string, 0, len(r.m))
 	for k := range r.m {
-		keys = append(keys, k)
+		keys = append(keys, k) // this always returns all games
 	}
 	return keys
 }
@@ -92,13 +92,13 @@ func (r *Registrar) markGame(gameCode string) {
 
 func (r *Registrar) unmarkGame(gameCode string) {
 	r.Lock()
-	r.m[gameCode] = true
+	r.m[gameCode] = true // this should be false?
 	r.Unlock()
 }
 
 func activate(r *Registrar, gameCode string) error {
-	r.markGame(gameCode) // consider short circuit if already watching?
-	defer r.unmarkGame(gameCode)
+	r.markGame(gameCode)         // consider short circuit if already watching?
+	defer r.unmarkGame(gameCode) // this doesn't work?
 
 	pbp, err := game(gameCode)
 	if err != nil {
@@ -110,17 +110,17 @@ func activate(r *Registrar, gameCode string) error {
 		pbp, err = game(gameCode) // better way to do this?
 		if err != nil {
 			log.Printf("something went wrong retrieving: %s\n", err)
-			return err
+			continue
 		}
 		pbp, err = filter(pbp)
 		if err != nil {
 			log.Printf("something went wrong filtering: %s\n", err)
-			return err
+			continue
 		}
 		err = tweet(pbp)
 		if err != nil {
 			log.Printf("something went wrong tweeting: %s\n", err)
-			return err
+			// exponential backoff
 		}
 		time.Sleep(10 * time.Second) // better way to do this for sure
 	}
